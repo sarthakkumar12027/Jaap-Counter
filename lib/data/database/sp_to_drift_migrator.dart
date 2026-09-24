@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/jaap_profile.dart';
@@ -17,10 +16,6 @@ class SpToDriftMigrator {
   static const String _keySankalps = 'jaap_sankalps';
   static const String _keyActiveProfileId = 'jaap_active_profile_id';
 
-  /// Performs an atomic, loss-less migration from SharedPreferences JSON storage to Drift SQLite.
-  /// If already migrated, returns immediately.
-  /// If fresh install (no SharedPreferences data), seeds initial defaults into Drift.
-  /// Legacy SharedPreferences keys are left intact as a safety backup.
   static Future<void> migrateIfNeeded(SharedPreferences prefs, AppDatabase db) async {
     final alreadyMigrated = prefs.getBool(migrationFlagKey) ?? false;
     if (alreadyMigrated) {
@@ -40,7 +35,6 @@ class SpToDriftMigrator {
         activeProfileId != null;
 
     if (!hasLegacyData) {
-      // --- Fresh Install ---
       final defaultProfile = JaapProfile(
         id: 'default_radhe',
         name: 'Radhe Radhe',
@@ -63,19 +57,15 @@ class SpToDriftMigrator {
       });
 
       await prefs.setBool(migrationFlagKey, true);
-      debugPrint('[SpToDriftMigrator] Fresh install initialized in Drift database.');
       return;
     }
 
-    // --- Migrate Existing SharedPreferences Data ---
     UserSettings settings = const UserSettings();
     if (rawSettings != null) {
       try {
         final map = jsonDecode(rawSettings) as Map<String, dynamic>;
         settings = UserSettings.fromJson(map);
-      } catch (e) {
-        debugPrint('[SpToDriftMigrator] Error parsing legacy settings: $e');
-      }
+      } catch (_) {}
     }
 
     List<JaapProfile> profiles = [];
@@ -85,9 +75,7 @@ class SpToDriftMigrator {
         profiles = list
             .map((item) => JaapProfile.fromJson(item as Map<String, dynamic>))
             .toList();
-      } catch (e) {
-        debugPrint('[SpToDriftMigrator] Error parsing legacy profiles: $e');
-      }
+      } catch (_) {}
     }
     if (profiles.isEmpty) {
       profiles.add(
@@ -113,9 +101,7 @@ class SpToDriftMigrator {
         sessions = list
             .map((item) => JaapSession.fromJson(item as Map<String, dynamic>))
             .toList();
-      } catch (e) {
-        debugPrint('[SpToDriftMigrator] Error parsing legacy sessions: $e');
-      }
+      } catch (_) {}
     }
 
     List<SankalpGoal> sankalps = [];
@@ -125,15 +111,12 @@ class SpToDriftMigrator {
         sankalps = list
             .map((item) => SankalpGoal.fromJson(item as Map<String, dynamic>))
             .toList();
-      } catch (e) {
-        debugPrint('[SpToDriftMigrator] Error parsing legacy sankalps: $e');
-      }
+      } catch (_) {}
     }
 
     final effectiveActiveId = activeProfileId ??
         (profiles.isNotEmpty ? profiles.first.id : 'default_radhe');
 
-    // Execute atomic migration inside a transaction
     await db.transaction(() async {
       await db.upsertProfiles(profiles);
       if (sessions.isNotEmpty) {
@@ -145,20 +128,13 @@ class SpToDriftMigrator {
       await db.saveUserSettings(settings, activeProfileId: effectiveActiveId);
     });
 
-    // Verification step
     final migratedProfiles = await db.getAllProfiles();
     final migratedSessions = await db.getAllSessions();
     if (migratedProfiles.length < profiles.length ||
         migratedSessions.length < sessions.length) {
-      throw StateError(
-        'Migration verification failed: Expected at least ${profiles.length} profiles and ${sessions.length} sessions, but found ${migratedProfiles.length} profiles and ${migratedSessions.length} sessions.',
-      );
+      throw StateError('Migration verification failed.');
     }
 
-    // Set completion flag
     await prefs.setBool(migrationFlagKey, true);
-    debugPrint(
-      '[SpToDriftMigrator] Successfully migrated ${profiles.length} profiles, ${sessions.length} sessions, ${sankalps.length} sankalps into Drift SQLite.',
-    );
   }
 }

@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../data/database/app_database.dart';
@@ -32,7 +31,6 @@ class StorageService {
         _sessions = sessions,
         _sankalps = sankalps;
 
-  /// Public constructor mainly for testing with pre-existing database and initial values
   StorageService(
     this._db, {
     UserSettings settings = const UserSettings(),
@@ -46,15 +44,12 @@ class StorageService {
         _sessions = sessions ?? [],
         _sankalps = sankalps ?? [];
 
-  /// Factory initializer that executes any pending migrations and populates fast in-memory caches.
   static Future<StorageService> init({AppDatabase? database, SharedPreferences? preferences}) async {
     final db = database ?? AppDatabase();
     final prefs = preferences ?? await SharedPreferences.getInstance();
 
-    // Migrate existing SharedPreferences data or seed fresh install into Drift SQLite
     await SpToDriftMigrator.migrateIfNeeded(prefs, db);
 
-    // Load fast in-memory state
     final settings = await db.getUserSettings();
     final profiles = await db.getAllProfiles();
     final activeId = await db.getActiveProfileId();
@@ -73,9 +68,7 @@ class StorageService {
 
   AppDatabase get db => _db;
 
-  // ==========================================
-  // SETTINGS
-  // ==========================================
+  // --- Settings ---
 
   UserSettings loadSettings() => _settings;
 
@@ -83,14 +76,10 @@ class StorageService {
     _settings = settings;
     try {
       await _db.saveUserSettings(settings, activeProfileId: _activeProfileId);
-    } catch (e) {
-      debugPrint('[StorageService] Error saving settings: $e');
-    }
+    } catch (_) {}
   }
 
-  // ==========================================
-  // PROFILES
-  // ==========================================
+  // --- Profiles ---
 
   List<JaapProfile> loadProfiles() {
     if (_profiles.isEmpty) {
@@ -126,9 +115,7 @@ class StorageService {
         }
         await _db.upsertProfiles(profiles);
       });
-    } catch (e) {
-      debugPrint('[StorageService] Error saving profiles: $e');
-    }
+    } catch (_) {}
   }
 
   String? loadActiveProfileId() => _activeProfileId;
@@ -137,14 +124,10 @@ class StorageService {
     _activeProfileId = id;
     try {
       await _db.saveActiveProfileId(id);
-    } catch (e) {
-      debugPrint('[StorageService] Error saving activeProfileId: $e');
-    }
+    } catch (_) {}
   }
 
-  // ==========================================
-  // SESSIONS
-  // ==========================================
+  // --- Sessions ---
 
   List<JaapSession> loadSessions() => _sessions;
 
@@ -162,14 +145,10 @@ class StorageService {
         }
         await _db.upsertSessions(sessions);
       });
-    } catch (e) {
-      debugPrint('[StorageService] Error saving sessions: $e');
-    }
+    } catch (_) {}
   }
 
-  // ==========================================
-  // SANKALP GOALS
-  // ==========================================
+  // --- Sankalps ---
 
   List<SankalpGoal> loadSankalps() => _sankalps;
 
@@ -187,14 +166,33 @@ class StorageService {
         }
         await _db.upsertSankalps(sankalps);
       });
-    } catch (e) {
-      debugPrint('[StorageService] Error saving sankalps: $e');
-    }
+    } catch (_) {}
   }
 
-  // ==========================================
-  // EXPORT / IMPORT BACKUP (100% JSON Backward Compatibility)
-  // ==========================================
+  // --- Atomic Counter State ---
+
+  Future<void> saveCounterStateAtomic({
+    required List<JaapProfile> profiles,
+    required List<JaapSession> sessions,
+    List<SankalpGoal>? sankalps,
+  }) async {
+    _profiles = List<JaapProfile>.from(profiles);
+    _sessions = List<JaapSession>.from(sessions);
+    if (sankalps != null) {
+      _sankalps = List<SankalpGoal>.from(sankalps);
+    }
+    try {
+      await _db.transaction(() async {
+        await _db.upsertProfiles(profiles);
+        await _db.upsertSessions(sessions);
+        if (sankalps != null) {
+          await _db.upsertSankalps(sankalps);
+        }
+      });
+    } catch (_) {}
+  }
+
+  // --- Export / Import Backup ---
 
   String exportAllData() {
     final exportMap = {
@@ -282,8 +280,7 @@ class StorageService {
       });
 
       return true;
-    } catch (e) {
-      debugPrint('[StorageService] Error importing backup: $e');
+    } catch (_) {
       return false;
     }
   }
@@ -296,8 +293,6 @@ class StorageService {
     _sankalps = [];
     try {
       await _db.clearAllData();
-    } catch (e) {
-      debugPrint('[StorageService] Error clearing all data: $e');
-    }
+    } catch (_) {}
   }
 }

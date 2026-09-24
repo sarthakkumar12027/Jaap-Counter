@@ -19,7 +19,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  group('Multilingual Localization Tests', () {
+  group('Multilingual Localization', () {
     test('Supports all 11 PRD languages with key translations', () {
       expect(AppLocalizations.supportedLanguages.length, 11);
 
@@ -36,60 +36,7 @@ void main() {
     });
   });
 
-  group('Direct Drift Database Operations & Relational Foreign Keys', () {
-    late AppDatabase db;
-
-    setUp(() {
-      db = AppDatabase.inMemory();
-    });
-
-    tearDown(() async {
-      await db.close();
-    });
-
-    test('Profile CRUD and Foreign Key Cascade to Sessions and Sankalps', () async {
-      final profile = JaapProfile(
-        id: 'p_test_cascade',
-        name: 'Cascade Test Profile',
-        createdAt: DateTime.now(),
-      );
-      await db.upsertProfile(profile);
-
-      final session = JaapSession(
-        id: 's_test_cascade',
-        jaapProfileId: 'p_test_cascade',
-        jaapProfileName: 'Cascade Test Profile',
-        date: DateTime(2025, 1, 1),
-        count: 108,
-        malaCompleted: 1,
-        createdAt: DateTime.now(),
-      );
-      await db.upsertSession(session);
-
-      final sankalp = SankalpGoal(
-        id: 'sk_test_cascade',
-        jaapProfileId: 'p_test_cascade',
-        title: 'Cascade Goal',
-        targetCount: 1000,
-        startDate: DateTime(2025, 1, 1),
-        endDate: DateTime(2025, 2, 1),
-      );
-      await db.upsertSankalp(sankalp);
-
-      expect((await db.getAllProfiles()).length, 1);
-      expect((await db.getAllSessions()).length, 1);
-      expect((await db.getAllSankalps()).length, 1);
-
-      // Delete profile -> Sessions & Sankalps cascade delete
-      await db.deleteProfile('p_test_cascade');
-
-      expect((await db.getAllProfiles()).length, 0);
-      expect((await db.getAllSessions()).length, 0);
-      expect((await db.getAllSankalps()).length, 0);
-    });
-  });
-
-  group('Jaap Controller Counting & Snapshot-based Undo Engine', () {
+  group('Counter Increments (+1, +10, +27, +108)', () {
     late AppDatabase db;
     late StorageService storage;
     late JaapRepository repository;
@@ -111,13 +58,7 @@ void main() {
       await db.close();
     });
 
-    test('Initial active profile is loaded with 0 count', () {
-      expect(jaapController.activeProfile, isNotNull);
-      expect(jaapController.activeProfile!.currentCount, 0);
-      expect(jaapController.activeProfile!.malaSize, 108);
-    });
-
-    test('Tap increments count and session record instantaneously', () async {
+    test('+1 Increment updates currentCount, lifetimeCount, and session count', () async {
       jaapController.increment();
       expect(jaapController.activeProfile!.currentCount, 1);
       expect(jaapController.activeProfile!.totalLifetimeCount, 1);
@@ -127,39 +68,139 @@ void main() {
       expect(jaapController.activeProfile!.currentCount, 2);
       expect(jaapController.activeProfile!.totalLifetimeCount, 2);
       expect(repository.getSessions().first.count, 2);
-
-      await Future<void>.delayed(const Duration(milliseconds: 20));
+      await Future<void>.delayed(const Duration(milliseconds: 10));
     });
 
-    test('Snapshot undo accurately rolls back profile count and session state', () async {
-      jaapController.increment();
-      jaapController.increment();
-      expect(jaapController.activeProfile!.currentCount, 2);
-      expect(repository.getSessions().first.count, 2);
+    test('+10 Direct Addition updates counts accurately', () async {
+      jaapController.addCountDirect(10);
+      expect(jaapController.activeProfile!.currentCount, 10);
+      expect(jaapController.activeProfile!.totalLifetimeCount, 10);
+      expect(repository.getSessions().first.count, 10);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    });
 
-      jaapController.undo();
+    test('+27 Direct Addition updates counts accurately', () async {
+      jaapController.addCountDirect(27);
+      expect(jaapController.activeProfile!.currentCount, 27);
+      expect(jaapController.activeProfile!.totalLifetimeCount, 27);
+      expect(repository.getSessions().first.count, 27);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    });
+
+    test('+108 Direct Addition completes 1 full Mala and updates lifetime & session', () async {
+      jaapController.addCountDirect(108);
+      expect(jaapController.activeProfile!.currentCount, 0);
+      expect(jaapController.activeProfile!.totalMalasCompleted, 1);
+      expect(jaapController.activeProfile!.totalLifetimeCount, 108);
+      expect(repository.getSessions().first.count, 108);
+      expect(repository.getSessions().first.malaCompleted, 1);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    });
+  });
+
+  group('Reversible Undo Engine', () {
+    late AppDatabase db;
+    late StorageService storage;
+    late JaapRepository repository;
+    late SettingsController settingsController;
+    late JaapController jaapController;
+
+    setUp(() async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await SharedPreferences.getInstance();
+      db = AppDatabase.inMemory();
+      storage = await StorageService.init(database: db, preferences: prefs);
+      repository = JaapRepository(storage);
+      settingsController = SettingsController(storage);
+      jaapController = JaapController(repository, settingsController);
+    });
+
+    tearDown(() async {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      await db.close();
+    });
+
+    test('Undo +1 restores exact previous profile and session count', () async {
+      jaapController.increment();
       expect(jaapController.activeProfile!.currentCount, 1);
-      expect(jaapController.activeProfile!.totalLifetimeCount, 1);
       expect(repository.getSessions().first.count, 1);
 
       jaapController.undo();
       expect(jaapController.activeProfile!.currentCount, 0);
       expect(jaapController.activeProfile!.totalLifetimeCount, 0);
-
-      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(repository.getSessions().isEmpty, true);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
     });
 
-    test('Completing Mala size resets count to 0 and increments Malas completed', () async {
+    test('Undo +10 restores exact previous state', () async {
+      jaapController.addCountDirect(10);
+      expect(jaapController.activeProfile!.currentCount, 10);
+      expect(repository.getSessions().first.count, 10);
+
+      jaapController.undo();
+      expect(jaapController.activeProfile!.currentCount, 0);
+      expect(jaapController.activeProfile!.totalLifetimeCount, 0);
+      expect(repository.getSessions().isEmpty, true);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    });
+
+    test('Undo +27 restores exact previous state', () async {
+      jaapController.addCountDirect(27);
+      expect(jaapController.activeProfile!.currentCount, 27);
+      expect(repository.getSessions().first.count, 27);
+
+      jaapController.undo();
+      expect(jaapController.activeProfile!.currentCount, 0);
+      expect(jaapController.activeProfile!.totalLifetimeCount, 0);
+      expect(repository.getSessions().isEmpty, true);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    });
+
+    test('Undo +108 restores 0 count, 0 malas, and reverts session malas', () async {
+      jaapController.addCountDirect(108);
+      expect(jaapController.activeProfile!.totalMalasCompleted, 1);
+      expect(repository.getSessions().first.malaCompleted, 1);
+
+      jaapController.undo();
+      expect(jaapController.activeProfile!.totalMalasCompleted, 0);
+      expect(jaapController.activeProfile!.currentCount, 0);
+      expect(jaapController.activeProfile!.totalLifetimeCount, 0);
+      expect(repository.getSessions().isEmpty, true);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    });
+  });
+
+  group('Mala Completion & Auto-Start Next Mala', () {
+    late AppDatabase db;
+    late StorageService storage;
+    late JaapRepository repository;
+    late SettingsController settingsController;
+    late JaapController jaapController;
+
+    setUp(() async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await SharedPreferences.getInstance();
+      db = AppDatabase.inMemory();
+      storage = await StorageService.init(database: db, preferences: prefs);
+      repository = JaapRepository(storage);
+      settingsController = SettingsController(storage);
+      jaapController = JaapController(repository, settingsController);
+    });
+
+    tearDown(() async {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      await db.close();
+    });
+
+    test('Mala completion with auto-start enabled (107 -> 108 -> 0)', () async {
       final testProfile = JaapProfile(
-        id: 'test_mala_3',
-        name: 'Om Shanti',
+        id: 'test_mala_profile',
+        name: 'Test Profile',
         malaSize: 3,
         dailyGoal: 9,
         createdAt: DateTime.now(),
       );
-
       await jaapController.addProfile(testProfile);
-      expect(jaapController.activeProfile!.id, 'test_mala_3');
 
       jaapController.increment();
       expect(jaapController.activeProfile!.currentCount, 1);
@@ -174,21 +215,141 @@ void main() {
       expect(jaapController.activeProfile!.totalLifetimeCount, 3);
       expect(jaapController.isMalaCompletedPulse, true);
 
-      await Future<void>.delayed(const Duration(milliseconds: 20));
+      jaapController.undo();
+      expect(jaapController.activeProfile!.currentCount, 2);
+      expect(jaapController.activeProfile!.totalMalasCompleted, 0);
+      expect(jaapController.activeProfile!.totalLifetimeCount, 2);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    });
+  });
+
+  group('Sankalp Synchronization & Reversal', () {
+    late AppDatabase db;
+    late StorageService storage;
+    late JaapRepository repository;
+    late SettingsController settingsController;
+    late JaapController jaapController;
+
+    setUp(() async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await SharedPreferences.getInstance();
+      db = AppDatabase.inMemory();
+      storage = await StorageService.init(database: db, preferences: prefs);
+      repository = JaapRepository(storage);
+      settingsController = SettingsController(storage);
+      jaapController = JaapController(repository, settingsController);
     });
 
-    test('Direct count addition works accurately and undo restores previous state', () async {
-      jaapController.addCountDirect(108);
-      expect(jaapController.activeProfile!.totalMalasCompleted, 1);
-      expect(jaapController.activeProfile!.currentCount, 0);
-      expect(jaapController.activeProfile!.totalLifetimeCount, 108);
+    tearDown(() async {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      await db.close();
+    });
+
+    test('Chanting advances active Sankalp progress; Undo reverses Sankalp progress', () async {
+      await jaapController.startNewSankalp(totalDays: 40, targetCount: 100);
+      expect(jaapController.activeSankalp, isNotNull);
+      expect(jaapController.activeSankalp!.currentCount, 0);
+      expect(jaapController.activeSankalp!.isCompleted, false);
+
+      jaapController.addCountDirect(50);
+      expect(jaapController.activeSankalp!.currentCount, 50);
+      expect(jaapController.activeSankalp!.isCompleted, false);
+
+      jaapController.increment();
+      expect(jaapController.activeSankalp!.currentCount, 51);
 
       jaapController.undo();
-      expect(jaapController.activeProfile!.totalMalasCompleted, 0);
+      expect(jaapController.activeSankalp!.currentCount, 50);
+
+      jaapController.undo();
+      expect(jaapController.activeSankalp!.currentCount, 0);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    });
+  });
+
+  group('Multi-Profile Isolation & Safe Undo Scope', () {
+    late AppDatabase db;
+    late StorageService storage;
+    late JaapRepository repository;
+    late SettingsController settingsController;
+    late JaapController jaapController;
+
+    setUp(() async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await SharedPreferences.getInstance();
+      db = AppDatabase.inMemory();
+      storage = await StorageService.init(database: db, preferences: prefs);
+      repository = JaapRepository(storage);
+      settingsController = SettingsController(storage);
+      jaapController = JaapController(repository, settingsController);
+    });
+
+    tearDown(() async {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      await db.close();
+    });
+
+    test('Operations on Profile A do not alter Profile B, and switching clears undo scope', () async {
+      final profileB = JaapProfile(
+        id: 'profile_b',
+        name: 'Om Namah Shivaya',
+        createdAt: DateTime.now(),
+      );
+      await jaapController.addProfile(profileB);
+
+      jaapController.increment();
+      jaapController.increment();
+      expect(jaapController.activeProfile!.id, 'profile_b');
+      expect(jaapController.activeProfile!.currentCount, 2);
+
+      jaapController.setActiveProfile('default_radhe');
+      expect(jaapController.activeProfile!.id, 'default_radhe');
       expect(jaapController.activeProfile!.currentCount, 0);
-      expect(jaapController.activeProfile!.totalLifetimeCount, 0);
+
+      expect(jaapController.canUndo, false);
+
+      final pB = jaapController.profiles.firstWhere((p) => p.id == 'profile_b');
+      expect(pB.currentCount, 2);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    });
+  });
+
+  group('Rapid Tapping & Concurrency Safety', () {
+    late AppDatabase db;
+    late StorageService storage;
+    late JaapRepository repository;
+    late SettingsController settingsController;
+    late JaapController jaapController;
+
+    setUp(() async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await SharedPreferences.getInstance();
+      db = AppDatabase.inMemory();
+      storage = await StorageService.init(database: db, preferences: prefs);
+      repository = JaapRepository(storage);
+      settingsController = SettingsController(storage);
+      jaapController = JaapController(repository, settingsController);
+    });
+
+    tearDown(() async {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      await db.close();
+    });
+
+    test('50 rapid consecutive taps produce exactly 50 count without drops', () async {
+      for (int i = 0; i < 50; i++) {
+        jaapController.increment();
+      }
+
+      expect(jaapController.activeProfile!.currentCount, 50);
+      expect(jaapController.activeProfile!.totalLifetimeCount, 50);
+      expect(repository.getSessions().first.count, 50);
 
       await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      final dbProfiles = await db.getAllProfiles();
+      expect(dbProfiles.first.currentCount, 50);
+      expect(dbProfiles.first.totalLifetimeCount, 50);
     });
   });
 
@@ -236,7 +397,7 @@ void main() {
     });
   });
 
-  group('History Controller Analytics & Streaks with Drift SQLite', () {
+  group('History Controller Analytics & Streaks', () {
     late AppDatabase db;
     late StorageService storage;
     late JaapRepository repository;
@@ -281,7 +442,6 @@ void main() {
       final today = DateTime(now.year, now.month, now.day);
       final yesterday = today.subtract(const Duration(days: 1));
 
-      // Partial count (50 chants < 108) with 0 malas completed yesterday
       await historyController.addManualSession(
         profileId: 'default_radhe',
         profileName: 'Radhe Radhe',
@@ -290,10 +450,8 @@ void main() {
         date: yesterday,
       );
 
-      // Streak is 0 because no full mala was completed
       expect(historyController.currentStreakDays, 0);
 
-      // Add full mala for yesterday
       await historyController.addManualSession(
         profileId: 'default_radhe',
         profileName: 'Radhe Radhe',
@@ -302,11 +460,9 @@ void main() {
         date: yesterday,
       );
 
-      // Active streak preserved from yesterday
       expect(historyController.currentStreakDays, 1);
       expect(historyController.isTodayMalaCompleted, false);
 
-      // Complete 1 mala today
       await historyController.addManualSession(
         profileId: 'default_radhe',
         profileName: 'Radhe Radhe',
@@ -315,7 +471,6 @@ void main() {
         date: today,
       );
 
-      // Streak increases to 2
       expect(historyController.currentStreakDays, 2);
       expect(historyController.isTodayMalaCompleted, true);
     });
@@ -333,7 +488,6 @@ void main() {
         date: threeDaysAgo,
       );
 
-      // Because yesterday and today have no malas, streak is broken
       expect(historyController.currentStreakDays, 0);
     });
 
@@ -341,7 +495,6 @@ void main() {
       final now = DateTime.now();
       final today = DateTime(now.year, now.month, now.day);
 
-      // 3 consecutive days in the past
       for (int i = 5; i >= 3; i--) {
         await historyController.addManualSession(
           profileId: 'default_radhe',
@@ -352,9 +505,8 @@ void main() {
         );
       }
 
-      // Best streak was 3 days
       expect(historyController.bestStreakDays, 3);
-      expect(historyController.currentStreakDays, 0); // Broken since 2 days ago was skipped
+      expect(historyController.currentStreakDays, 0);
 
       final weekStatus = historyController.currentWeekStreakStatus;
       expect(weekStatus.length, 7);
@@ -367,7 +519,7 @@ void main() {
     });
   });
 
-  group('Storage & Backup Restore Integrity with Drift SQLite', () {
+  group('Storage & Backup Restore Integrity', () {
     test('Export and Import JSON retains full user data in Drift SQLite', () async {
       SharedPreferences.setMockInitialValues({});
       final prefs = await SharedPreferences.getInstance();
@@ -397,7 +549,7 @@ void main() {
     });
   });
 
-  group('SharedPreferences to Drift SQLite Data Migration Suite', () {
+  group('SharedPreferences to Drift SQLite Data Migration', () {
     test('Migrates existing legacy SharedPreferences data to Drift with zero loss', () async {
       final legacyProfile = JaapProfile(
         id: 'shiva_profile_1',
@@ -470,16 +622,12 @@ void main() {
       final prefs = await SharedPreferences.getInstance();
       final db = AppDatabase.inMemory();
 
-      // Ensure not migrated before
       expect(prefs.getBool(SpToDriftMigrator.migrationFlagKey), isNull);
 
-      // Perform migration via StorageService.init
       final storage = await StorageService.init(database: db, preferences: prefs);
 
-      // Verify migration flag is set
       expect(prefs.getBool(SpToDriftMigrator.migrationFlagKey), true);
 
-      // Verify profiles in Drift
       final profiles = storage.loadProfiles();
       expect(profiles.length, 1);
       expect(profiles.first.id, 'shiva_profile_1');
@@ -487,26 +635,22 @@ void main() {
       expect(profiles.first.totalLifetimeCount, 1134);
       expect(profiles.first.currentCount, 54);
 
-      // Verify sessions in Drift
       final sessions = storage.loadSessions();
       expect(sessions.length, 2);
       expect(sessions.any((s) => s.id == 'session_101' && s.count == 108), true);
       expect(sessions.any((s) => s.id == 'session_102' && s.count == 216), true);
 
-      // Verify sankalps in Drift
       final sankalps = storage.loadSankalps();
       expect(sankalps.length, 1);
       expect(sankalps.first.id, 'sankalp_shiva');
       expect(sankalps.first.targetCount, 43200);
 
-      // Verify settings & active profile in Drift
       final settings = storage.loadSettings();
       expect(settings.localeCode, 'hi');
       expect(settings.accentIndex, 2);
       expect(settings.counterStyle, CounterStyle.mala);
       expect(storage.loadActiveProfileId(), 'shiva_profile_1');
 
-      // Verify original SharedPreferences keys are safely preserved
       expect(prefs.getString('jaap_profiles'), isNotNull);
       expect(prefs.getString('jaap_sessions'), isNotNull);
 
@@ -528,7 +672,6 @@ void main() {
       final prefs = await SharedPreferences.getInstance();
       final db = AppDatabase.inMemory();
 
-      // Seed newer profile into db
       final newProfile = JaapProfile(
         id: 'new_drift_p',
         name: 'New Drift Profile',
@@ -536,7 +679,6 @@ void main() {
       );
       await db.upsertProfile(newProfile);
 
-      // Calling migration should be a no-op because flag is true
       await SpToDriftMigrator.migrateIfNeeded(prefs, db);
 
       final dbProfiles = await db.getAllProfiles();

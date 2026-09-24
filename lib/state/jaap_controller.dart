@@ -4,16 +4,36 @@ import '../core/services/audio_service.dart';
 import '../core/services/haptic_service.dart';
 import '../data/models/jaap_profile.dart';
 import '../data/models/jaap_session.dart';
+import '../data/models/sankalp_goal.dart';
 import '../data/repositories/jaap_repository.dart';
 import 'settings_controller.dart';
 
-class JaapUndoState {
-  final JaapProfile previousProfile;
-  final List<JaapSession> previousSessions;
+enum CounterOperationType { increment, directAdd, reset }
 
-  const JaapUndoState({
+class CounterOperation {
+  final String operationId;
+  final String profileId;
+  final DateTime timestamp;
+  final CounterOperationType type;
+  final int deltaCount;
+  final int deltaMalas;
+
+  final JaapProfile previousProfile;
+  final JaapSession? previousTodaySession;
+  final SankalpGoal? previousActiveSankalp;
+  final int elapsedSecondsAdded;
+
+  const CounterOperation({
+    required this.operationId,
+    required this.profileId,
+    required this.timestamp,
+    required this.type,
+    required this.deltaCount,
+    required this.deltaMalas,
     required this.previousProfile,
-    required this.previousSessions,
+    this.previousTodaySession,
+    this.previousActiveSankalp,
+    this.elapsedSecondsAdded = 0,
   });
 }
 
@@ -24,23 +44,29 @@ class JaapController extends ChangeNotifier {
 
   List<JaapProfile> _profiles = [];
   JaapProfile? _activeProfile;
-  final List<JaapUndoState> _undoStack = []; // stores snapshot states for accurate undo
+  final List<CounterOperation> _undoStack = [];
 
   bool _isMalaCompletedPulse = false;
   bool _isStreakIncreased = false;
   Timer? _completionPulseTimer;
 
-  DateTime? _sessionStartTime;
+  DateTime? _lastTapTime;
+  static const int _inactivityThresholdSeconds = 180;
 
   JaapController(this._repository, this._settingsController) {
     _loadInitialData();
   }
 
+  JaapRepository get repository => _repository;
   List<JaapProfile> get profiles => _profiles;
   JaapProfile? get activeProfile => _activeProfile;
   bool get isMalaCompletedPulse => _isMalaCompletedPulse;
   bool get isStreakIncreased => _isStreakIncreased;
-  bool get canUndo => _undoStack.isNotEmpty;
+  bool get canUndo =>
+      _undoStack.isNotEmpty && _undoStack.last.profileId == _activeProfile?.id;
+
+  SankalpGoal? get activeSankalp =>
+      _activeProfile != null ? _repository.getActiveSankalpForProfile(_activeProfile!.id) : null;
 
   void _loadInitialData() {
     _profiles = _repository.getProfiles();
@@ -54,17 +80,42 @@ class JaapController extends ChangeNotifier {
     notifyListeners();
   }
 
-  // --- Sub-millisecond Counting Engine ---
+  int _calculateElapsedSeconds() {
+    final now = DateTime.now();
+    int elapsed = 0;
+    if (_lastTapTime != null) {
+      final diff = now.difference(_lastTapTime!).inSeconds;
+      if (diff > 0 && diff <= _inactivityThresholdSeconds) {
+        elapsed = diff;
+      } else {
+        elapsed = 1;
+      }
+    } else {
+      elapsed = 1;
+    }
+    _lastTapTime = now;
+    return elapsed;
+  }
 
   void increment() {
     if (_activeProfile == null) return;
 
-    _sessionStartTime ??= DateTime.now();
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final elapsedSec = _calculateElapsedSeconds();
 
-    // Push full snapshot for accurate undo
-    _pushUndoSnapshot();
+    final prevProfile = _activeProfile!;
+    final prevSessions = _repository.getSessions();
+    final todayIndex = prevSessions.indexWhere((s) =>
+        s.jaapProfileId == _activeProfile!.id &&
+        s.date.year == today.year &&
+        s.date.month == today.month &&
+        s.date.day == today.day &&
+        !s.isManualEntry);
+    final prevTodaySession = todayIndex >= 0 ? prevSessions[todayIndex] : null;
+    final prevActiveSankalp =
+        _repository.getActiveSankalpForProfile(_activeProfile!.id);
 
-    // Audio & Haptic triggers
     _audioService.playTapSound(_settingsController.tapSound);
     HapticService.triggerTap(_settingsController.hapticLevel);
 
@@ -74,7 +125,6 @@ class JaapController extends ChangeNotifier {
     bool malaFinished = false;
 
     if (newCount >= _activeProfile!.malaSize) {
-      // Mala completed!
       malaFinished = true;
       newMalas += 1;
       _triggerMalaCompletion();
@@ -89,42 +139,185 @@ class JaapController extends ChangeNotifier {
       totalMalasCompleted: newMalas,
       totalLifetimeCount: newLifetime,
     );
-
     _updateProfileInList(_activeProfile!);
+
+    final updatedSessions = List<JaapSession>.from(prevSessions);
+    if (todayIndex >= 0) {
+      final existing = updatedSessions[todayIndex];
+      updatedSessions[todayIndex] = existing.copyWith(
+        count: existing.count + 1,
+        malaCompleted: malaFinished ? existing.malaCompleted + 1 : existing.malaCompleted,
+        durationSeconds: existing.durationSeconds + elapsedSec,
+      );
+    } else {
+      updatedSessions.insert(
+        0,
+        JaapSession(
+          id: 'session_${now.millisecondsSinceEpoch}',
+          jaapProfileId: _activeProfile!.id,
+          jaapProfileName: _activeProfile!.name,
+          date: today,
+          count: 1,
+          malaCompleted: malaFinished ? 1 : 0,
+          durationSeconds: elapsedSec,
+          isManualEntry: false,
+          createdAt: now,
+        ),
+      );
+    }
+
+    List<SankalpGoal>? updatedSankalps;
+    if (prevActiveSankalp != null) {
+      final allSankalps = List<SankalpGoal>.from(_repository.getSankalps());
+      final sIdx = allSankalps.indexWhere((s) => s.id == prevActiveSankalp.id);
+      if (sIdx >= 0) {
+        final newSankalpCount = prevActiveSankalp.currentCount + 1;
+        final isDone = newSankalpCount >= prevActiveSankalp.targetCount;
+        allSankalps[sIdx] = prevActiveSankalp.copyWith(
+          currentCount: newSankalpCount,
+          isCompleted: isDone,
+        );
+        updatedSankalps = allSankalps;
+      }
+    }
+
+    _pushUndoOperation(
+      CounterOperation(
+        operationId: 'op_${now.millisecondsSinceEpoch}',
+        profileId: _activeProfile!.id,
+        timestamp: now,
+        type: CounterOperationType.increment,
+        deltaCount: 1,
+        deltaMalas: malaFinished ? 1 : 0,
+        previousProfile: prevProfile,
+        previousTodaySession: prevTodaySession,
+        previousActiveSankalp: prevActiveSankalp,
+        elapsedSecondsAdded: elapsedSec,
+      ),
+    );
+
     notifyListeners();
 
-    // Persist and record session
-    _recordSessionTap(malaFinished: malaFinished);
+    _repository.saveCounterStateAtomic(
+      profiles: _profiles,
+      sessions: updatedSessions,
+      sankalps: updatedSankalps,
+    );
   }
 
   void undo() {
     if (_activeProfile == null || _undoStack.isEmpty) return;
 
-    final snapshot = _undoStack.removeLast();
+    final op = _undoStack.removeLast();
+    if (op.profileId != _activeProfile!.id) return;
+
     _audioService.playTapSound(_settingsController.tapSound);
     HapticService.triggerTap(_settingsController.hapticLevel);
 
-    _activeProfile = snapshot.previousProfile;
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+
+    _activeProfile = op.previousProfile;
     _updateProfileInList(_activeProfile!);
-    _repository.saveSessions(snapshot.previousSessions);
-    _saveProfilesToDisk();
+
+    final sessions = List<JaapSession>.from(_repository.getSessions());
+    final todayIndex = sessions.indexWhere((s) =>
+        s.jaapProfileId == _activeProfile!.id &&
+        s.date.year == today.year &&
+        s.date.month == today.month &&
+        s.date.day == today.day &&
+        !s.isManualEntry);
+
+    if (op.previousTodaySession != null) {
+      if (todayIndex >= 0) {
+        sessions[todayIndex] = op.previousTodaySession!;
+      } else {
+        sessions.insert(0, op.previousTodaySession!);
+      }
+    } else {
+      if (todayIndex >= 0) {
+        sessions.removeAt(todayIndex);
+      }
+    }
+
+    List<SankalpGoal>? sankalps;
+    if (op.previousActiveSankalp != null) {
+      final allSankalps = List<SankalpGoal>.from(_repository.getSankalps());
+      final sIdx = allSankalps.indexWhere((s) => s.id == op.previousActiveSankalp!.id);
+      if (sIdx >= 0) {
+        allSankalps[sIdx] = op.previousActiveSankalp!;
+        sankalps = allSankalps;
+      }
+    }
 
     notifyListeners();
+
+    _repository.saveCounterStateAtomic(
+      profiles: _profiles,
+      sessions: sessions,
+      sankalps: sankalps,
+    );
   }
 
   void resetCurrentCount() {
     if (_activeProfile == null) return;
-    _pushUndoSnapshot();
+
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+
+    final prevProfile = _activeProfile!;
+    final prevSessions = _repository.getSessions();
+    final todayIndex = prevSessions.indexWhere((s) =>
+        s.jaapProfileId == _activeProfile!.id &&
+        s.date.year == today.year &&
+        s.date.month == today.month &&
+        s.date.day == today.day &&
+        !s.isManualEntry);
+    final prevTodaySession = todayIndex >= 0 ? prevSessions[todayIndex] : null;
+    final prevActiveSankalp =
+        _repository.getActiveSankalpForProfile(_activeProfile!.id);
+
     _activeProfile = _activeProfile!.copyWith(currentCount: 0);
     _updateProfileInList(_activeProfile!);
+
+    _pushUndoOperation(
+      CounterOperation(
+        operationId: 'reset_${now.millisecondsSinceEpoch}',
+        profileId: _activeProfile!.id,
+        timestamp: now,
+        type: CounterOperationType.reset,
+        deltaCount: -prevProfile.currentCount,
+        deltaMalas: 0,
+        previousProfile: prevProfile,
+        previousTodaySession: prevTodaySession,
+        previousActiveSankalp: prevActiveSankalp,
+        elapsedSecondsAdded: 0,
+      ),
+    );
+
     notifyListeners();
-    _saveProfilesToDisk();
+
+    _repository.saveProfiles(_profiles);
   }
 
   void addCountDirect(int delta) {
     if (_activeProfile == null || delta <= 0) return;
 
-    _pushUndoSnapshot();
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+
+    final prevProfile = _activeProfile!;
+    final prevSessions = _repository.getSessions();
+    final todayIndex = prevSessions.indexWhere((s) =>
+        s.jaapProfileId == _activeProfile!.id &&
+        s.date.year == today.year &&
+        s.date.month == today.month &&
+        s.date.day == today.day &&
+        !s.isManualEntry);
+    final prevTodaySession = todayIndex >= 0 ? prevSessions[todayIndex] : null;
+    final prevActiveSankalp =
+        _repository.getActiveSankalpForProfile(_activeProfile!.id);
+
     int newCount = _activeProfile!.currentCount + delta;
     int completedMalasDelta = newCount ~/ _activeProfile!.malaSize;
     int remainingCount = newCount % _activeProfile!.malaSize;
@@ -134,21 +327,106 @@ class JaapController extends ChangeNotifier {
       totalMalasCompleted: _activeProfile!.totalMalasCompleted + completedMalasDelta,
       totalLifetimeCount: _activeProfile!.totalLifetimeCount + delta,
     );
-
     _updateProfileInList(_activeProfile!);
-    notifyListeners();
 
-    _recordManualDelta(delta, completedMalasDelta);
-  }
+    if (completedMalasDelta > 0) {
+      _triggerMalaCompletion();
+    }
 
-  void _pushUndoSnapshot() {
-    if (_activeProfile == null) return;
-    _undoStack.add(
-      JaapUndoState(
-        previousProfile: _activeProfile!,
-        previousSessions: List<JaapSession>.from(_repository.getSessions()),
+    final updatedSessions = List<JaapSession>.from(prevSessions);
+    if (todayIndex >= 0) {
+      final existing = updatedSessions[todayIndex];
+      updatedSessions[todayIndex] = existing.copyWith(
+        count: existing.count + delta,
+        malaCompleted: existing.malaCompleted + completedMalasDelta,
+      );
+    } else {
+      updatedSessions.insert(
+        0,
+        JaapSession(
+          id: 'session_${now.millisecondsSinceEpoch}',
+          jaapProfileId: _activeProfile!.id,
+          jaapProfileName: _activeProfile!.name,
+          date: today,
+          count: delta,
+          malaCompleted: completedMalasDelta,
+          durationSeconds: 0,
+          isManualEntry: false,
+          createdAt: now,
+        ),
+      );
+    }
+
+    List<SankalpGoal>? updatedSankalps;
+    if (prevActiveSankalp != null) {
+      final allSankalps = List<SankalpGoal>.from(_repository.getSankalps());
+      final sIdx = allSankalps.indexWhere((s) => s.id == prevActiveSankalp.id);
+      if (sIdx >= 0) {
+        final newSankalpCount = prevActiveSankalp.currentCount + delta;
+        final isDone = newSankalpCount >= prevActiveSankalp.targetCount;
+        allSankalps[sIdx] = prevActiveSankalp.copyWith(
+          currentCount: newSankalpCount,
+          isCompleted: isDone,
+        );
+        updatedSankalps = allSankalps;
+      }
+    }
+
+    _pushUndoOperation(
+      CounterOperation(
+        operationId: 'direct_${now.millisecondsSinceEpoch}',
+        profileId: _activeProfile!.id,
+        timestamp: now,
+        type: CounterOperationType.directAdd,
+        deltaCount: delta,
+        deltaMalas: completedMalasDelta,
+        previousProfile: prevProfile,
+        previousTodaySession: prevTodaySession,
+        previousActiveSankalp: prevActiveSankalp,
+        elapsedSecondsAdded: 0,
       ),
     );
+
+    notifyListeners();
+
+    _repository.saveCounterStateAtomic(
+      profiles: _profiles,
+      sessions: updatedSessions,
+      sankalps: updatedSankalps,
+    );
+  }
+
+  Future<void> startNewSankalp({
+    required int totalDays,
+    required int targetCount,
+  }) async {
+    if (_activeProfile == null) return;
+    final now = DateTime.now();
+    final newSankalp = SankalpGoal(
+      id: 'sankalp_${now.millisecondsSinceEpoch}',
+      jaapProfileId: _activeProfile!.id,
+      title: '$totalDays-Day Sankalp (${_activeProfile!.name})',
+      targetCount: targetCount,
+      currentCount: 0,
+      totalDays: totalDays,
+      startDate: now,
+      endDate: now.add(Duration(days: totalDays)),
+      isCompleted: false,
+    );
+
+    final allSankalps = List<SankalpGoal>.from(_repository.getSankalps());
+    for (int i = 0; i < allSankalps.length; i++) {
+      if (allSankalps[i].jaapProfileId == _activeProfile!.id && !allSankalps[i].isCompleted) {
+        allSankalps[i] = allSankalps[i].copyWith(isCompleted: true);
+      }
+    }
+    allSankalps.insert(0, newSankalp);
+    await _repository.saveSankalps(allSankalps);
+    notifyListeners();
+  }
+
+  void _pushUndoOperation(CounterOperation op) {
+    _undoStack.add(op);
     if (_undoStack.length > 50) {
       _undoStack.removeAt(0);
     }
@@ -159,7 +437,6 @@ class JaapController extends ChangeNotifier {
     _audioService.playCompletionSound(_settingsController.completionSound);
     HapticService.triggerCompletion(_settingsController.hapticLevel);
 
-    // Check if user had already completed a mala today before this one
     final now = DateTime.now();
     final hadMalaToday = _repository.getSessions().any((s) =>
         s.malaCompleted > 0 &&
@@ -177,78 +454,11 @@ class JaapController extends ChangeNotifier {
     });
   }
 
-  void _recordSessionTap({required bool malaFinished}) {
-    _saveProfilesToDisk();
-
-    // Grouping session logs by today
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-
-    final sessions = List<JaapSession>.from(_repository.getSessions());
-    final todayIndex = sessions.indexWhere((s) =>
-        s.jaapProfileId == _activeProfile!.id &&
-        s.date.year == today.year &&
-        s.date.month == today.month &&
-        s.date.day == today.day &&
-        !s.isManualEntry);
-
-    if (todayIndex >= 0) {
-      final existing = sessions[todayIndex];
-      sessions[todayIndex] = existing.copyWith(
-        count: existing.count + 1,
-        malaCompleted: malaFinished ? existing.malaCompleted + 1 : existing.malaCompleted,
-        durationSeconds: existing.durationSeconds + 1,
-      );
-    } else {
-      sessions.insert(
-        0,
-        JaapSession(
-          id: 'session_${DateTime.now().millisecondsSinceEpoch}',
-          jaapProfileId: _activeProfile!.id,
-          jaapProfileName: _activeProfile!.name,
-          date: today,
-          count: 1,
-          malaCompleted: malaFinished ? 1 : 0,
-          durationSeconds: 1,
-          isManualEntry: false,
-          createdAt: DateTime.now(),
-        ),
-      );
-    }
-
-    _repository.saveSessions(sessions);
-  }
-
-  void _recordManualDelta(int deltaCount, int deltaMalas) {
-    _saveProfilesToDisk();
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-
-    final sessions = List<JaapSession>.from(_repository.getSessions());
-    sessions.insert(
-      0,
-      JaapSession(
-        id: 'manual_${DateTime.now().millisecondsSinceEpoch}',
-        jaapProfileId: _activeProfile!.id,
-        jaapProfileName: _activeProfile!.name,
-        date: today,
-        count: deltaCount,
-        malaCompleted: deltaMalas,
-        durationSeconds: 0,
-        isManualEntry: true,
-        createdAt: DateTime.now(),
-      ),
-    );
-
-    _repository.saveSessions(sessions);
-  }
-
-  // --- Profile Management ---
-
   void setActiveProfile(String profileId) {
     final found = _profiles.firstWhere((p) => p.id == profileId, orElse: () => _profiles.first);
     _activeProfile = found;
     _undoStack.clear();
+    _lastTapTime = null;
     _repository.saveActiveProfileId(profileId);
     notifyListeners();
   }
@@ -257,8 +467,9 @@ class JaapController extends ChangeNotifier {
     _profiles.add(profile);
     _activeProfile = profile;
     _undoStack.clear();
+    _lastTapTime = null;
     notifyListeners();
-    await _saveProfilesToDisk();
+    await _repository.saveProfiles(_profiles);
     await _repository.saveActiveProfileId(profile.id);
   }
 
@@ -270,20 +481,21 @@ class JaapController extends ChangeNotifier {
         _activeProfile = profile;
       }
       notifyListeners();
-      await _saveProfilesToDisk();
+      await _repository.saveProfiles(_profiles);
     }
   }
 
   Future<void> deleteProfile(String profileId) async {
-    if (_profiles.length <= 1) return; // Keep at least one profile
+    if (_profiles.length <= 1) return;
     _profiles.removeWhere((p) => p.id == profileId);
     if (_activeProfile?.id == profileId) {
       _activeProfile = _profiles.first;
       _undoStack.clear();
+      _lastTapTime = null;
       await _repository.saveActiveProfileId(_activeProfile!.id);
     }
     notifyListeners();
-    await _saveProfilesToDisk();
+    await _repository.saveProfiles(_profiles);
   }
 
   void _updateProfileInList(JaapProfile profile) {
@@ -293,11 +505,6 @@ class JaapController extends ChangeNotifier {
     }
   }
 
-  Future<void> _saveProfilesToDisk() async {
-    await _repository.saveProfiles(_profiles);
-  }
-
-  // --- Daily Goal Analytics for Active Profile ---
   int getTodayCountForActiveProfile() {
     if (_activeProfile == null) return 0;
     final now = DateTime.now();

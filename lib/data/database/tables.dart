@@ -1,6 +1,5 @@
 import 'package:drift/drift.dart';
 
-// --- 1. Profiles Table ---
 class JaapProfilesTable extends Table {
   @override
   String get tableName => 'jaap_profiles';
@@ -23,7 +22,6 @@ class JaapProfilesTable extends Table {
   Set<Column> get primaryKey => {id};
 }
 
-// --- 2. Sessions Table ---
 class JaapSessionsTable extends Table {
   @override
   String get tableName => 'jaap_sessions';
@@ -42,7 +40,6 @@ class JaapSessionsTable extends Table {
   Set<Column> get primaryKey => {id};
 }
 
-// --- 3. Sankalp Goals Table ---
 class SankalpGoalsTable extends Table {
   @override
   String get tableName => 'sankalp_goals';
@@ -61,7 +58,6 @@ class SankalpGoalsTable extends Table {
   Set<Column> get primaryKey => {id};
 }
 
-// --- 4. User Settings Table (Single-row entity with ID 1) ---
 class UserSettingsTable extends Table {
   @override
   String get tableName => 'user_settings';

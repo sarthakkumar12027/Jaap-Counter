@@ -36,7 +36,6 @@ class AppDatabase extends _$AppDatabase {
     return MigrationStrategy(
       onCreate: (Migrator m) async {
         await m.createAll();
-        // Create indexes for high-speed queries on sessions
         await customStatement(
           'CREATE INDEX IF NOT EXISTS idx_sessions_date ON jaap_sessions(date);',
         );
@@ -50,9 +49,7 @@ class AppDatabase extends _$AppDatabase {
     );
   }
 
-  // ==========================================
-  // PROFILES CRUD & QUERIES
-  // ==========================================
+  // --- Profiles ---
 
   Future<List<JaapProfile>> getAllProfiles() async {
     final query = select(jaapProfilesTable)
@@ -87,9 +84,7 @@ class AppDatabase extends _$AppDatabase {
     await delete(jaapProfilesTable).go();
   }
 
-  // ==========================================
-  // SESSIONS CRUD & QUERIES
-  // ==========================================
+  // --- Sessions ---
 
   Future<List<JaapSession>> getAllSessions() async {
     final query = select(jaapSessionsTable)
@@ -133,9 +128,7 @@ class AppDatabase extends _$AppDatabase {
     await delete(jaapSessionsTable).go();
   }
 
-  // ==========================================
-  // SANKALP GOALS CRUD & QUERIES
-  // ==========================================
+  // --- Sankalps ---
 
   Future<List<SankalpGoal>> getAllSankalps() async {
     final query = select(sankalpGoalsTable)
@@ -165,9 +158,7 @@ class AppDatabase extends _$AppDatabase {
     await delete(sankalpGoalsTable).go();
   }
 
-  // ==========================================
-  // USER SETTINGS & ACTIVE PROFILE
-  // ==========================================
+  // --- Settings ---
 
   Future<UserSettings> getUserSettings() async {
     final row = await (select(userSettingsTable)..where((t) => t.id.equals(1))).getSingleOrNull();
@@ -226,9 +217,7 @@ class AppDatabase extends _$AppDatabase {
     });
   }
 
-  // ==========================================
-  // MODEL CONVERTERS (Domain <-> Drift)
-  // ==========================================
+  // --- Converters ---
 
   static JaapProfile _rowToProfile(JaapProfilesTableData row) {
     return JaapProfile(

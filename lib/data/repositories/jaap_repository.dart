@@ -23,4 +23,26 @@ class JaapRepository {
   List<SankalpGoal> getSankalps() => _storage.loadSankalps();
 
   Future<void> saveSankalps(List<SankalpGoal> sankalps) => _storage.saveSankalps(sankalps);
+
+  SankalpGoal? getActiveSankalpForProfile(String profileId) {
+    final sankalps = _storage.loadSankalps();
+    try {
+      return sankalps.firstWhere(
+        (s) => s.jaapProfileId == profileId && !s.isCompleted,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> saveCounterStateAtomic({
+    required List<JaapProfile> profiles,
+    required List<JaapSession> sessions,
+    List<SankalpGoal>? sankalps,
+  }) =>
+      _storage.saveCounterStateAtomic(
+        profiles: profiles,
+        sessions: sessions,
+        sankalps: sankalps,
+      );
 }
