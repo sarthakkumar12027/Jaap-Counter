@@ -1,0 +1,164 @@
+import 'dart:convert';
+import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../models/jaap_profile.dart';
+import '../models/jaap_session.dart';
+import '../models/sankalp_goal.dart';
+import '../models/user_settings.dart';
+import 'app_database.dart';
+
+class SpToDriftMigrator {
+  static const String migrationFlagKey = 'sp_migrated_to_drift_v1';
+
+  static const String _keySettings = 'jaap_user_settings';
+  static const String _keyProfiles = 'jaap_profiles';
+  static const String _keySessions = 'jaap_sessions';
+  static const String _keySankalps = 'jaap_sankalps';
+  static const String _keyActiveProfileId = 'jaap_active_profile_id';
+
+  /// Performs an atomic, loss-less migration from SharedPreferences JSON storage to Drift SQLite.
+  /// If already migrated, returns immediately.
+  /// If fresh install (no SharedPreferences data), seeds initial defaults into Drift.
+  /// Legacy SharedPreferences keys are left intact as a safety backup.
+  static Future<void> migrateIfNeeded(SharedPreferences prefs, AppDatabase db) async {
+    final alreadyMigrated = prefs.getBool(migrationFlagKey) ?? false;
+    if (alreadyMigrated) {
+      return;
+    }
+
+    final rawSettings = prefs.getString(_keySettings);
+    final rawProfiles = prefs.getString(_keyProfiles);
+    final rawSessions = prefs.getString(_keySessions);
+    final rawSankalps = prefs.getString(_keySankalps);
+    final activeProfileId = prefs.getString(_keyActiveProfileId);
+
+    final hasLegacyData = rawSettings != null ||
+        rawProfiles != null ||
+        rawSessions != null ||
+        rawSankalps != null ||
+        activeProfileId != null;
+
+    if (!hasLegacyData) {
+      // --- Fresh Install ---
+      final defaultProfile = JaapProfile(
+        id: 'default_radhe',
+        name: 'Radhe Radhe',
+        originalText: 'राधे राधे',
+        transliteration: 'Radhe Radhe',
+        category: 'Popular',
+        malaSize: 108,
+        dailyGoal: 108,
+        accentColorHex: '0xFF5F7D6B',
+        createdAt: DateTime.now(),
+        isActive: true,
+      );
+
+      await db.transaction(() async {
+        await db.upsertProfile(defaultProfile);
+        await db.saveUserSettings(
+          const UserSettings(),
+          activeProfileId: defaultProfile.id,
+        );
+      });
+
+      await prefs.setBool(migrationFlagKey, true);
+      debugPrint('[SpToDriftMigrator] Fresh install initialized in Drift database.');
+      return;
+    }
+
+    // --- Migrate Existing SharedPreferences Data ---
+    UserSettings settings = const UserSettings();
+    if (rawSettings != null) {
+      try {
+        final map = jsonDecode(rawSettings) as Map<String, dynamic>;
+        settings = UserSettings.fromJson(map);
+      } catch (e) {
+        debugPrint('[SpToDriftMigrator] Error parsing legacy settings: $e');
+      }
+    }
+
+    List<JaapProfile> profiles = [];
+    if (rawProfiles != null) {
+      try {
+        final list = jsonDecode(rawProfiles) as List<dynamic>;
+        profiles = list
+            .map((item) => JaapProfile.fromJson(item as Map<String, dynamic>))
+            .toList();
+      } catch (e) {
+        debugPrint('[SpToDriftMigrator] Error parsing legacy profiles: $e');
+      }
+    }
+    if (profiles.isEmpty) {
+      profiles.add(
+        JaapProfile(
+          id: 'default_radhe',
+          name: 'Radhe Radhe',
+          originalText: 'राधे राधे',
+          transliteration: 'Radhe Radhe',
+          category: 'Popular',
+          malaSize: 108,
+          dailyGoal: 108,
+          accentColorHex: '0xFF5F7D6B',
+          createdAt: DateTime.now(),
+          isActive: true,
+        ),
+      );
+    }
+
+    List<JaapSession> sessions = [];
+    if (rawSessions != null) {
+      try {
+        final list = jsonDecode(rawSessions) as List<dynamic>;
+        sessions = list
+            .map((item) => JaapSession.fromJson(item as Map<String, dynamic>))
+            .toList();
+      } catch (e) {
+        debugPrint('[SpToDriftMigrator] Error parsing legacy sessions: $e');
+      }
+    }
+
+    List<SankalpGoal> sankalps = [];
+    if (rawSankalps != null) {
+      try {
+        final list = jsonDecode(rawSankalps) as List<dynamic>;
+        sankalps = list
+            .map((item) => SankalpGoal.fromJson(item as Map<String, dynamic>))
+            .toList();
+      } catch (e) {
+        debugPrint('[SpToDriftMigrator] Error parsing legacy sankalps: $e');
+      }
+    }
+
+    final effectiveActiveId = activeProfileId ??
+        (profiles.isNotEmpty ? profiles.first.id : 'default_radhe');
+
+    // Execute atomic migration inside a transaction
+    await db.transaction(() async {
+      await db.upsertProfiles(profiles);
+      if (sessions.isNotEmpty) {
+        await db.upsertSessions(sessions);
+      }
+      if (sankalps.isNotEmpty) {
+        await db.upsertSankalps(sankalps);
+      }
+      await db.saveUserSettings(settings, activeProfileId: effectiveActiveId);
+    });
+
+    // Verification step
+    final migratedProfiles = await db.getAllProfiles();
+    final migratedSessions = await db.getAllSessions();
+    if (migratedProfiles.length < profiles.length ||
+        migratedSessions.length < sessions.length) {
+      throw StateError(
+        'Migration verification failed: Expected at least ${profiles.length} profiles and ${sessions.length} sessions, but found ${migratedProfiles.length} profiles and ${migratedSessions.length} sessions.',
+      );
+    }
+
+    // Set completion flag
+    await prefs.setBool(migrationFlagKey, true);
+    debugPrint(
+      '[SpToDriftMigrator] Successfully migrated ${profiles.length} profiles, ${sessions.length} sessions, ${sankalps.length} sankalps into Drift SQLite.',
+    );
+  }
+}

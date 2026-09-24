@@ -1,8 +1,13 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jaap_counter/core/localization/app_localizations.dart';
 import 'package:jaap_counter/core/services/storage_service.dart';
+import 'package:jaap_counter/data/database/app_database.dart';
+import 'package:jaap_counter/data/database/sp_to_drift_migrator.dart';
 import 'package:jaap_counter/data/models/jaap_profile.dart';
+import 'package:jaap_counter/data/models/jaap_session.dart';
+import 'package:jaap_counter/data/models/sankalp_goal.dart';
 import 'package:jaap_counter/data/models/user_settings.dart';
 import 'package:jaap_counter/data/repositories/jaap_repository.dart';
 import 'package:jaap_counter/state/history_controller.dart';
@@ -31,7 +36,8 @@ void main() {
     });
   });
 
-  group('Jaap Controller Counting & Mala Engine', () {
+  group('Jaap Controller Counting & Mala Engine with Drift SQLite', () {
+    late AppDatabase db;
     late StorageService storage;
     late JaapRepository repository;
     late SettingsController settingsController;
@@ -40,10 +46,16 @@ void main() {
     setUp(() async {
       SharedPreferences.setMockInitialValues({});
       final prefs = await SharedPreferences.getInstance();
-      storage = StorageService(prefs);
+      db = AppDatabase.inMemory();
+      storage = await StorageService.init(database: db, preferences: prefs);
       repository = JaapRepository(storage);
       settingsController = SettingsController(storage);
       jaapController = JaapController(repository, settingsController);
+    });
+
+    tearDown(() async {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      await db.close();
     });
 
     test('Initial active profile is loaded with 0 count', () {
@@ -52,7 +64,7 @@ void main() {
       expect(jaapController.activeProfile!.malaSize, 108);
     });
 
-    test('Tap increments count instantaneously', () {
+    test('Tap increments count instantaneously', () async {
       jaapController.increment();
       expect(jaapController.activeProfile!.currentCount, 1);
       expect(jaapController.activeProfile!.totalLifetimeCount, 1);
@@ -60,9 +72,11 @@ void main() {
       jaapController.increment();
       expect(jaapController.activeProfile!.currentCount, 2);
       expect(jaapController.activeProfile!.totalLifetimeCount, 2);
+
+      await Future<void>.delayed(const Duration(milliseconds: 20));
     });
 
-    test('Undo reverts count to previous state', () {
+    test('Undo reverts count to previous state', () async {
       jaapController.increment();
       jaapController.increment();
       expect(jaapController.activeProfile!.currentCount, 2);
@@ -73,6 +87,8 @@ void main() {
 
       jaapController.undo();
       expect(jaapController.activeProfile!.currentCount, 0);
+
+      await Future<void>.delayed(const Duration(milliseconds: 20));
     });
 
     test('Completing Mala size resets count to 0 and increments Malas completed', () async {
@@ -99,13 +115,17 @@ void main() {
       expect(jaapController.activeProfile!.totalMalasCompleted, 1);
       expect(jaapController.activeProfile!.totalLifetimeCount, 3);
       expect(jaapController.isMalaCompletedPulse, true);
+
+      await Future<void>.delayed(const Duration(milliseconds: 20));
     });
 
-    test('Direct count addition works accurately', () {
+    test('Direct count addition works accurately', () async {
       jaapController.addCountDirect(108);
       expect(jaapController.activeProfile!.totalMalasCompleted, 1);
       expect(jaapController.activeProfile!.currentCount, 0);
       expect(jaapController.activeProfile!.totalLifetimeCount, 108);
+
+      await Future<void>.delayed(const Duration(milliseconds: 20));
     });
   });
 
@@ -153,7 +173,8 @@ void main() {
     });
   });
 
-  group('History Controller Analytics & Streaks', () {
+  group('History Controller Analytics & Streaks with Drift SQLite', () {
+    late AppDatabase db;
     late StorageService storage;
     late JaapRepository repository;
     late SettingsController settingsController;
@@ -163,11 +184,17 @@ void main() {
     setUp(() async {
       SharedPreferences.setMockInitialValues({});
       final prefs = await SharedPreferences.getInstance();
-      storage = StorageService(prefs);
+      db = AppDatabase.inMemory();
+      storage = await StorageService.init(database: db, preferences: prefs);
       repository = JaapRepository(storage);
       settingsController = SettingsController(storage);
       jaapController = JaapController(repository, settingsController);
       historyController = HistoryController(repository, jaapController);
+    });
+
+    tearDown(() async {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      await db.close();
     });
 
     test('Manual session entry updates aggregated history and weekly data', () async {
@@ -277,11 +304,12 @@ void main() {
     });
   });
 
-  group('Storage & Backup Restore Integrity', () {
-    test('Export and Import JSON retains full user data', () async {
+  group('Storage & Backup Restore Integrity with Drift SQLite', () {
+    test('Export and Import JSON retains full user data in Drift SQLite', () async {
       SharedPreferences.setMockInitialValues({});
       final prefs = await SharedPreferences.getInstance();
-      final storage = StorageService(prefs);
+      final db = AppDatabase.inMemory();
+      final storage = await StorageService.init(database: db, preferences: prefs);
 
       final settings = const UserSettings(
         localeCode: 'hi',
@@ -301,6 +329,158 @@ void main() {
       expect(success, true);
       expect(storage.loadSettings().localeCode, 'hi');
       expect(storage.loadSettings().counterStyle, CounterStyle.mala);
+
+      await db.close();
+    });
+  });
+
+  group('SharedPreferences to Drift SQLite Data Migration Suite', () {
+    test('Migrates existing legacy SharedPreferences data to Drift with zero loss', () async {
+      final legacyProfile = JaapProfile(
+        id: 'shiva_profile_1',
+        name: 'Om Namah Shivaya',
+        originalText: 'ॐ नमः शिवाय',
+        transliteration: 'Om Namah Shivaya',
+        category: 'Popular',
+        malaSize: 108,
+        dailyGoal: 216,
+        accentColorHex: '0xFF5F7D6B',
+        currentCount: 54,
+        totalMalasCompleted: 10,
+        totalLifetimeCount: 1134,
+        createdAt: DateTime(2025, 1, 1),
+        isActive: true,
+      );
+
+      final legacySession1 = JaapSession(
+        id: 'session_101',
+        jaapProfileId: 'shiva_profile_1',
+        jaapProfileName: 'Om Namah Shivaya',
+        date: DateTime(2025, 1, 1),
+        count: 108,
+        malaCompleted: 1,
+        durationSeconds: 300,
+        isManualEntry: false,
+        createdAt: DateTime(2025, 1, 1, 10, 0),
+      );
+
+      final legacySession2 = JaapSession(
+        id: 'session_102',
+        jaapProfileId: 'shiva_profile_1',
+        jaapProfileName: 'Om Namah Shivaya',
+        date: DateTime(2025, 1, 2),
+        count: 216,
+        malaCompleted: 2,
+        durationSeconds: 600,
+        isManualEntry: false,
+        createdAt: DateTime(2025, 1, 2, 11, 0),
+      );
+
+      final legacySankalp = SankalpGoal(
+        id: 'sankalp_shiva',
+        jaapProfileId: 'shiva_profile_1',
+        title: 'Shiva 40-Day Sankalp',
+        targetCount: 43200,
+        currentCount: 324,
+        totalDays: 40,
+        startDate: DateTime(2025, 1, 1),
+        endDate: DateTime(2025, 2, 9),
+        isCompleted: false,
+      );
+
+      final legacySettings = const UserSettings(
+        localeCode: 'hi',
+        accentIndex: 2,
+        counterStyle: CounterStyle.mala,
+        streakTracking: true,
+        autoStartNextMala: true,
+      );
+
+      SharedPreferences.setMockInitialValues({
+        'jaap_profiles': jsonEncode([legacyProfile.toJson()]),
+        'jaap_sessions': jsonEncode([legacySession1.toJson(), legacySession2.toJson()]),
+        'jaap_sankalps': jsonEncode([legacySankalp.toJson()]),
+        'jaap_user_settings': jsonEncode(legacySettings.toJson()),
+        'jaap_active_profile_id': 'shiva_profile_1',
+      });
+
+      final prefs = await SharedPreferences.getInstance();
+      final db = AppDatabase.inMemory();
+
+      // Ensure not migrated before
+      expect(prefs.getBool(SpToDriftMigrator.migrationFlagKey), isNull);
+
+      // Perform migration via StorageService.init
+      final storage = await StorageService.init(database: db, preferences: prefs);
+
+      // Verify migration flag is set
+      expect(prefs.getBool(SpToDriftMigrator.migrationFlagKey), true);
+
+      // Verify profiles in Drift
+      final profiles = storage.loadProfiles();
+      expect(profiles.length, 1);
+      expect(profiles.first.id, 'shiva_profile_1');
+      expect(profiles.first.name, 'Om Namah Shivaya');
+      expect(profiles.first.totalLifetimeCount, 1134);
+      expect(profiles.first.currentCount, 54);
+
+      // Verify sessions in Drift
+      final sessions = storage.loadSessions();
+      expect(sessions.length, 2);
+      expect(sessions.any((s) => s.id == 'session_101' && s.count == 108), true);
+      expect(sessions.any((s) => s.id == 'session_102' && s.count == 216), true);
+
+      // Verify sankalps in Drift
+      final sankalps = storage.loadSankalps();
+      expect(sankalps.length, 1);
+      expect(sankalps.first.id, 'sankalp_shiva');
+      expect(sankalps.first.targetCount, 43200);
+
+      // Verify settings & active profile in Drift
+      final settings = storage.loadSettings();
+      expect(settings.localeCode, 'hi');
+      expect(settings.accentIndex, 2);
+      expect(settings.counterStyle, CounterStyle.mala);
+      expect(storage.loadActiveProfileId(), 'shiva_profile_1');
+
+      // Verify original SharedPreferences keys are safely preserved
+      expect(prefs.getString('jaap_profiles'), isNotNull);
+      expect(prefs.getString('jaap_sessions'), isNotNull);
+
+      await db.close();
+    });
+
+    test('Migration is idempotent and does not overwrite updated database state', () async {
+      SharedPreferences.setMockInitialValues({
+        SpToDriftMigrator.migrationFlagKey: true,
+        'jaap_profiles': jsonEncode([
+          JaapProfile(
+            id: 'legacy_p',
+            name: 'Old Legacy',
+            createdAt: DateTime.now(),
+          ).toJson()
+        ]),
+      });
+
+      final prefs = await SharedPreferences.getInstance();
+      final db = AppDatabase.inMemory();
+
+      // Seed newer profile into db
+      final newProfile = JaapProfile(
+        id: 'new_drift_p',
+        name: 'New Drift Profile',
+        createdAt: DateTime.now(),
+      );
+      await db.upsertProfile(newProfile);
+
+      // Calling migration should be a no-op because flag is true
+      await SpToDriftMigrator.migrateIfNeeded(prefs, db);
+
+      final dbProfiles = await db.getAllProfiles();
+      expect(dbProfiles.length, 1);
+      expect(dbProfiles.first.id, 'new_drift_p');
+
+      await db.close();
     });
   });
 }
