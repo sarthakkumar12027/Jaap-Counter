@@ -7,6 +7,16 @@ import '../data/models/jaap_session.dart';
 import '../data/repositories/jaap_repository.dart';
 import 'settings_controller.dart';
 
+class JaapUndoState {
+  final JaapProfile previousProfile;
+  final List<JaapSession> previousSessions;
+
+  const JaapUndoState({
+    required this.previousProfile,
+    required this.previousSessions,
+  });
+}
+
 class JaapController extends ChangeNotifier {
   final JaapRepository _repository;
   final SettingsController _settingsController;
@@ -14,14 +24,13 @@ class JaapController extends ChangeNotifier {
 
   List<JaapProfile> _profiles = [];
   JaapProfile? _activeProfile;
-  final List<int> _undoStack = []; // stores previous count states for instant undo
+  final List<JaapUndoState> _undoStack = []; // stores snapshot states for accurate undo
 
   bool _isMalaCompletedPulse = false;
   bool _isStreakIncreased = false;
   Timer? _completionPulseTimer;
 
   DateTime? _sessionStartTime;
-
 
   JaapController(this._repository, this._settingsController) {
     _loadInitialData();
@@ -52,10 +61,8 @@ class JaapController extends ChangeNotifier {
 
     _sessionStartTime ??= DateTime.now();
 
-
-    // Save previous count for instant undo
-    _undoStack.add(_activeProfile!.currentCount);
-    if (_undoStack.length > 50) _undoStack.removeAt(0);
+    // Push full snapshot for accurate undo
+    _pushUndoSnapshot();
 
     // Audio & Haptic triggers
     _audioService.playTapSound(_settingsController.tapSound);
@@ -93,27 +100,21 @@ class JaapController extends ChangeNotifier {
   void undo() {
     if (_activeProfile == null || _undoStack.isEmpty) return;
 
-    final prevCount = _undoStack.removeLast();
+    final snapshot = _undoStack.removeLast();
     _audioService.playTapSound(_settingsController.tapSound);
     HapticService.triggerTap(_settingsController.hapticLevel);
 
-    int newLifetime = _activeProfile!.totalLifetimeCount > 0
-        ? _activeProfile!.totalLifetimeCount - 1
-        : 0;
-
-    _activeProfile = _activeProfile!.copyWith(
-      currentCount: prevCount,
-      totalLifetimeCount: newLifetime,
-    );
-
+    _activeProfile = snapshot.previousProfile;
     _updateProfileInList(_activeProfile!);
-    notifyListeners();
+    _repository.saveSessions(snapshot.previousSessions);
     _saveProfilesToDisk();
+
+    notifyListeners();
   }
 
   void resetCurrentCount() {
     if (_activeProfile == null) return;
-    _undoStack.clear();
+    _pushUndoSnapshot();
     _activeProfile = _activeProfile!.copyWith(currentCount: 0);
     _updateProfileInList(_activeProfile!);
     notifyListeners();
@@ -123,7 +124,7 @@ class JaapController extends ChangeNotifier {
   void addCountDirect(int delta) {
     if (_activeProfile == null || delta <= 0) return;
 
-    _undoStack.add(_activeProfile!.currentCount);
+    _pushUndoSnapshot();
     int newCount = _activeProfile!.currentCount + delta;
     int completedMalasDelta = newCount ~/ _activeProfile!.malaSize;
     int remainingCount = newCount % _activeProfile!.malaSize;
@@ -138,6 +139,19 @@ class JaapController extends ChangeNotifier {
     notifyListeners();
 
     _recordManualDelta(delta, completedMalasDelta);
+  }
+
+  void _pushUndoSnapshot() {
+    if (_activeProfile == null) return;
+    _undoStack.add(
+      JaapUndoState(
+        previousProfile: _activeProfile!,
+        previousSessions: List<JaapSession>.from(_repository.getSessions()),
+      ),
+    );
+    if (_undoStack.length > 50) {
+      _undoStack.removeAt(0);
+    }
   }
 
   void _triggerMalaCompletion() {
@@ -170,7 +184,7 @@ class JaapController extends ChangeNotifier {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
 
-    final sessions = _repository.getSessions();
+    final sessions = List<JaapSession>.from(_repository.getSessions());
     final todayIndex = sessions.indexWhere((s) =>
         s.jaapProfileId == _activeProfile!.id &&
         s.date.year == today.year &&
@@ -210,7 +224,7 @@ class JaapController extends ChangeNotifier {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
 
-    final sessions = _repository.getSessions();
+    final sessions = List<JaapSession>.from(_repository.getSessions());
     sessions.insert(
       0,
       JaapSession(

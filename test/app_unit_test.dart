@@ -36,7 +36,60 @@ void main() {
     });
   });
 
-  group('Jaap Controller Counting & Mala Engine with Drift SQLite', () {
+  group('Direct Drift Database Operations & Relational Foreign Keys', () {
+    late AppDatabase db;
+
+    setUp(() {
+      db = AppDatabase.inMemory();
+    });
+
+    tearDown(() async {
+      await db.close();
+    });
+
+    test('Profile CRUD and Foreign Key Cascade to Sessions and Sankalps', () async {
+      final profile = JaapProfile(
+        id: 'p_test_cascade',
+        name: 'Cascade Test Profile',
+        createdAt: DateTime.now(),
+      );
+      await db.upsertProfile(profile);
+
+      final session = JaapSession(
+        id: 's_test_cascade',
+        jaapProfileId: 'p_test_cascade',
+        jaapProfileName: 'Cascade Test Profile',
+        date: DateTime(2025, 1, 1),
+        count: 108,
+        malaCompleted: 1,
+        createdAt: DateTime.now(),
+      );
+      await db.upsertSession(session);
+
+      final sankalp = SankalpGoal(
+        id: 'sk_test_cascade',
+        jaapProfileId: 'p_test_cascade',
+        title: 'Cascade Goal',
+        targetCount: 1000,
+        startDate: DateTime(2025, 1, 1),
+        endDate: DateTime(2025, 2, 1),
+      );
+      await db.upsertSankalp(sankalp);
+
+      expect((await db.getAllProfiles()).length, 1);
+      expect((await db.getAllSessions()).length, 1);
+      expect((await db.getAllSankalps()).length, 1);
+
+      // Delete profile -> Sessions & Sankalps cascade delete
+      await db.deleteProfile('p_test_cascade');
+
+      expect((await db.getAllProfiles()).length, 0);
+      expect((await db.getAllSessions()).length, 0);
+      expect((await db.getAllSankalps()).length, 0);
+    });
+  });
+
+  group('Jaap Controller Counting & Snapshot-based Undo Engine', () {
     late AppDatabase db;
     late StorageService storage;
     late JaapRepository repository;
@@ -64,29 +117,34 @@ void main() {
       expect(jaapController.activeProfile!.malaSize, 108);
     });
 
-    test('Tap increments count instantaneously', () async {
+    test('Tap increments count and session record instantaneously', () async {
       jaapController.increment();
       expect(jaapController.activeProfile!.currentCount, 1);
       expect(jaapController.activeProfile!.totalLifetimeCount, 1);
+      expect(repository.getSessions().first.count, 1);
 
       jaapController.increment();
       expect(jaapController.activeProfile!.currentCount, 2);
       expect(jaapController.activeProfile!.totalLifetimeCount, 2);
+      expect(repository.getSessions().first.count, 2);
 
       await Future<void>.delayed(const Duration(milliseconds: 20));
     });
 
-    test('Undo reverts count to previous state', () async {
+    test('Snapshot undo accurately rolls back profile count and session state', () async {
       jaapController.increment();
       jaapController.increment();
       expect(jaapController.activeProfile!.currentCount, 2);
+      expect(repository.getSessions().first.count, 2);
 
       jaapController.undo();
       expect(jaapController.activeProfile!.currentCount, 1);
       expect(jaapController.activeProfile!.totalLifetimeCount, 1);
+      expect(repository.getSessions().first.count, 1);
 
       jaapController.undo();
       expect(jaapController.activeProfile!.currentCount, 0);
+      expect(jaapController.activeProfile!.totalLifetimeCount, 0);
 
       await Future<void>.delayed(const Duration(milliseconds: 20));
     });
@@ -119,11 +177,16 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 20));
     });
 
-    test('Direct count addition works accurately', () async {
+    test('Direct count addition works accurately and undo restores previous state', () async {
       jaapController.addCountDirect(108);
       expect(jaapController.activeProfile!.totalMalasCompleted, 1);
       expect(jaapController.activeProfile!.currentCount, 0);
       expect(jaapController.activeProfile!.totalLifetimeCount, 108);
+
+      jaapController.undo();
+      expect(jaapController.activeProfile!.totalMalasCompleted, 0);
+      expect(jaapController.activeProfile!.currentCount, 0);
+      expect(jaapController.activeProfile!.totalLifetimeCount, 0);
 
       await Future<void>.delayed(const Duration(milliseconds: 20));
     });
