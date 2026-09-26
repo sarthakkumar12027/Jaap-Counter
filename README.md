@@ -43,7 +43,7 @@ A peaceful, minimal, and beautiful digital Mala and Jaap counting application bu
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/YOUR_USERNAME/jaap_counter.git
+   git clone [https://github.com/sarthakkumar12027/Jaap-Counter.git]
    cd jaap_counter
    ```
 
