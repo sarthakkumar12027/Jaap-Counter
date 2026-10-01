@@ -11,7 +11,6 @@ import 'state/jaap_controller.dart';
 import 'state/settings_controller.dart';
 import 'ui/navigation/main_navigation.dart';
 import 'ui/onboarding/onboarding_screen.dart';
-import 'ui/splash/splash_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -56,8 +55,6 @@ class JaapApp extends StatefulWidget {
 }
 
 class _JaapAppState extends State<JaapApp> {
-  bool _showSplash = true;
-
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
@@ -82,28 +79,20 @@ class _JaapAppState extends State<JaapApp> {
           supportedLocales: AppLocalizations.supportedLanguages
               .map((l) => Locale(l.code))
               .toList(),
-          home: _showSplash
-              ? SplashScreen(
-                  onFinish: () {
-                    setState(() {
-                      _showSplash = false;
-                    });
-                  },
+          home: settings.isOnboardingCompleted
+              ? MainNavigation(
+                  settingsController: widget.settingsController,
+                  jaapController: widget.jaapController,
+                  historyController: widget.historyController,
+                  storageService: widget.storageService,
                 )
-              : (settings.isOnboardingCompleted
-                  ? MainNavigation(
-                      settingsController: widget.settingsController,
-                      jaapController: widget.jaapController,
-                      historyController: widget.historyController,
-                      storageService: widget.storageService,
-                    )
-                  : OnboardingScreen(
-                      settingsController: widget.settingsController,
-                      jaapController: widget.jaapController,
-                      onComplete: () {
-                        setState(() {});
-                      },
-                    )),
+              : OnboardingScreen(
+                  settingsController: widget.settingsController,
+                  jaapController: widget.jaapController,
+                  onComplete: () {
+                    setState(() {});
+                  },
+                ),
         );
       },
     );
