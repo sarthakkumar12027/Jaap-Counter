@@ -1,33 +1,45 @@
 # Jaap Counter (जाप काउंटर)
 
-A peaceful, minimal, and beautiful digital Mala and Jaap counting application built with Flutter. Designed for daily spiritual practice across various traditions with mindful haptics, custom audio feedback, daily goal tracking, and multilingual support.
+A peaceful, minimal, and beautiful digital Mala and Jaap counting application built with Flutter. Designed for daily spiritual practice across traditions with mindful haptics, custom audio feedback, daily streak tracking, 40-day Sankalp vows, and 11-language multilingual support.
 
 ---
 
 ## ✨ Features
 
 - **Minimalist & Distraction-Free:** Clean interface designed to keep your focus entirely on your spiritual chant.
-- **Multiple Visualizer Modes:** Choose between a traditional Mala bead wheel, a minimal modern progress ring, or a full-screen Focus Mode.
-- **Mantra Library:** Built-in catalog of popular chants, prayers, and mantras with original script, transliteration, and meanings (Radhe Radhe, Mahamantra, Gayatri Mantra, Waheguru, Om Mani Padme Hum, Navkar Mantra, Tasbih, and more).
-- **Custom Profiles:** Create, edit, and organize multiple Jaap routines with custom mala sizes (27, 54, 108, or custom) and accent colors.
+- **Multiple Visualizer Modes:**
+  - **Traditional Mala Beads:** Realistic 108-bead circular simulation with fluid rotational scrolling.
+  - **Minimal Ring:** Clean modern circular progress ring with smooth completion indicators.
+  - **Full-Screen Focus Mode:** Immersive, single-tap counting screen eliminating all distractions.
+- **Multi-Profile Chanting:** Create, edit, and organize multiple Jaap routines with custom mala sizes (27, 54, 108, or custom targets) and custom spiritual accent colors.
+- **Quick Increments & Reversible Undo:**
+  - One-tap addition for `+1`, `+10`, `+27`, and `+108` counts.
+  - Snapshot-based multi-step **Undo Engine** that safely reverses count additions, completed malas, session totals, and active Sankalp progress.
+- **Curated Mantra Library:** Built-in catalog of 14 popular chants, prayers, and mantras with original script, transliteration, and spiritual meanings (Radhe Radhe, Mahamantra, Gayatri Mantra, Mahamrityunjaya, Waheguru, Om Mani Padme Hum, Navkar Mantra, Tasbih, and more).
+- **40-Day Sankalp (Vow) Tracker:** Set sacred vows with custom targets, daily milestones, completion tracking, and visual progress indicators.
 - **Mindful Feedback:**
-  - Haptic feedback on every tap (light, medium, heavy, or bead simulation).
-  - Subtle acoustic bells / chimes at mala milestones.
-  - Optional Voice/Speech counting.
-- **Daily Goals & Streak Tracking:** Track daily completion, view history and practice stats, and build consistent daily habits.
-- **Meditation & Breath Timer:** Built-in timer with soothing ambient background sounds (Om frequency, Temple bell, Rain, River).
-- **Offline & Private:** All data is saved locally on your device using Hive. No account or cloud sync required.
-- **Multilingual Support:** Localized in 11 languages including English, Hindi, Bengali, Punjabi, Gujarati, Tamil, Telugu, Marathi, Kannada, Malayalam, and Odia.
+  - Configurable tactile haptic feedback (Off, Light, Medium, Heavy, Bead Simulation) powered by Flutter's native haptic engine.
+  - Subtle acoustic bells, temple gongs, singing bowls, and flute chimes for mala milestone completions.
+- **History Analytics & Streaks:** Custom-rendered 7-day weekly practice bar chart, lifetime statistics, manual session logging, and consecutive-day streak tracking.
+- **Timed Meditation & Ambient Audio:** Built-in meditation timer (custom durations) with continuous soothing ambient sound (Om chanting) and completion bell gong.
+- **100% Offline & Private:** All data is stored locally on-device using a type-safe **Drift (SQLite)** relational database. No accounts, no servers, no ads, and no tracking. Includes full JSON Backup Export & Import.
+- **Multilingual Support:** Instant runtime language switching across 11 Indian and global languages:
+  - English, हिन्दी (Hindi), বাংলা (Bengali), ਪੰਜਾਬੀ (Punjabi), ગુજરાતી (Gujarati), தமிழ் (Tamil), తెలుగు (Telugu), मराठी (Marathi), ಕನ್ನಡ (Kannada), മലയാളം (Malayalam), and ଓଡ଼ିଆ (Odia).
 
 ---
 
 ## 🛠️ Tech Stack & Architecture
 
 - **Framework:** [Flutter](https://flutter.dev) (Dart 3.x)
-- **Local Storage:** [Hive](https://pub.dev/packages/hive) & [Hive Flutter](https://pub.dev/packages/hive_flutter)
-- **State Management:** Reactive controller pattern using Flutter's native `ChangeNotifier` / `ListenableBuilder`
-- **Audio & Haptics:** `audioplayers`, `flutter_tts`, `vibration`
-- **Charts & UI:** `fl_chart`, `shared_preferences`, `intl`
+- **Database / Local Storage:**
+  - [Drift (SQLite)](https://pub.dev/packages/drift) with [sqlite3_flutter_libs](https://pub.dev/packages/sqlite3_flutter_libs) for fast, relational, ACID-compliant local storage.
+  - [SharedPreferences](https://pub.dev/packages/shared_preferences) with automatic zero-data-loss migration to Drift.
+- **State Management:** Reactive controller pattern using Flutter's native `ChangeNotifier` and `ListenableBuilder` (`JaapController`, `HistoryController`, `SettingsController`, `MeditationController`).
+- **Typography:** [Google Fonts](https://pub.dev/packages/google_fonts) (`Outfit`).
+- **Audio Service:** [Audioplayers](https://pub.dev/packages/audioplayers) for low-latency acoustic feedback and ambient looping.
+- **Haptic Engine:** Native `HapticFeedback` via custom `HapticService`.
+- **Localization:** Lightweight zero-dependency translation engine (`AppLocalizations`).
+- **UI Components:** Custom Canvas-drawn analytics (`WeeklyChart`), procedural bead rendering (`MalaBeads`), and custom Cupertino/Material adaptive sheets.
 
 ---
 
@@ -35,15 +47,15 @@ A peaceful, minimal, and beautiful digital Mala and Jaap counting application bu
 
 ### Prerequisites
 
-- [Flutter SDK](https://flutter.dev/docs/get-started/install) (3.24.0 or higher recommended)
-- [Android Studio](https://developer.android.com/studio) or VS Code with Flutter extension
-- An Android or iOS device / emulator
+- [Flutter SDK](https://flutter.dev/docs/get-started/install) (3.24.0 or higher)
+- [Android Studio](https://developer.android.com/studio) / VS Code with Flutter extension
+- An Android device or emulator (Android 7.0+ / API 24+) or iOS device / simulator
 
 ### Installation
 
 1. **Clone the repository:**
    ```bash
-   git clone [https://github.com/sarthakkumar12027/Jaap-Counter.git]
+   git clone https://github.com/sarthakkumar12027/Jaap-Counter.git
    cd jaap_counter
    ```
 
@@ -52,12 +64,17 @@ A peaceful, minimal, and beautiful digital Mala and Jaap counting application bu
    flutter pub get
    ```
 
-3. **Run the app:**
+3. **Run tests:**
+   ```bash
+   flutter test
+   ```
+
+4. **Run the app:**
    ```bash
    flutter run
    ```
 
-4. **Build APK (Android):**
+5. **Build Release APK:**
    ```bash
    flutter build apk --release
    ```
@@ -69,19 +86,25 @@ A peaceful, minimal, and beautiful digital Mala and Jaap counting application bu
 ```
 lib/
 ├── core/
-│   ├── constants/       # App colors, typography, theme configs
-│   ├── localization/    # 11-language translation engine
-│   └── services/        # Audio, Haptics, Storage, TTS services
+│   ├── constants/       # App colors, typography, sound asset paths
+│   ├── localization/    # 11-language runtime translation engine
+│   ├── services/        # AudioService, HapticService, StorageService
+│   └── theme/           # Light & Dark theme definitions with spiritual accent colors
 ├── data/
-│   ├── models/          # JaapProfile, JaapSession, MantraItem models
-│   └── repositories/    # Mantra catalog & local database repository
-├── state/               # App, Jaap, History, Meditation controllers
+│   ├── database/        # Drift SQLite database, tables, and migration logic
+│   ├── models/          # JaapProfile, JaapSession, SankalpGoal, UserSettings, MantraItem
+│   └── repositories/    # Mantra catalog & Jaap data repository
+├── state/               # JaapController, HistoryController, SettingsController, MeditationController
 └── ui/
-    ├── counter/         # Main counting screen & focus mode
-    ├── history/         # Analytics, calendar, and streak tracker
-    ├── library/         # Built-in mantra selection sheet
-    ├── meditation/      # Timed meditation & ambient audio
-    └── settings/        # Preferences, sound guide, language switcher
+    ├── counter/         # Main counting screen, Mala wheel, ring, profile sheet
+    ├── focus/           # Fullscreen distraction-free chanting mode
+    ├── history/         # Analytics, custom weekly chart, and streak tracker
+    ├── library/         # Built-in 14-mantra curated spiritual library
+    ├── meditation/      # Timed meditation with ambient sound & bell timer
+    ├── navigation/      # Main bottom navigation bar
+    ├── onboarding/      # First-launch language and initial setup screen
+    ├── settings/        # Preferences, Sankalp management, backup/restore, sound guide
+    └── widgets/         # Mala bead wheel, minimal ring, completion toast, streak badge
 ```
 
 ---
