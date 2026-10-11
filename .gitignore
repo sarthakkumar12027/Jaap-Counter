@@ -50,3 +50,6 @@ app.*.map.json
 .gradle/
 android/.gradle/
 
+# Promotional & Marketing Assets
+promotional_assets/
+promotional_output/
